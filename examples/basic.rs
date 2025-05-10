@@ -8,10 +8,10 @@ enum Api {
 
 fn main() -> Result<(), sio::Error> {
     let sm: sio::SansIo<Api> = sio::SansIo::new();
-    let mut driver = sio::Driver::new(sio::task!(make_call(&sm)));
+    let mut driver = sio::Driver::new(sio::task!(make_call, sm));
     let ret = loop {
         match driver.step(&sm)? {
-            sio::Step::Call(call) => {
+            sio::Step::Next(call) => {
                 println!("Our task made a call! {call:?}");
                 sm.respond(Api::Response)?;
                 continue;
@@ -25,7 +25,7 @@ fn main() -> Result<(), sio::Error> {
     Ok(())
 }
 
-async fn make_call(sm: &sio::SansIo<Api>) -> Result<usize, sio::Error> {
+async fn make_call(sm: sio::SansIo<Api>) -> Result<usize, sio::Error> {
     println!("Lets make a call!");
 
     let val = sm.invoke(Api::Request)?.await;

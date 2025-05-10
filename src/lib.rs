@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 #[macro_export]
 macro_rules! task {
-    ($expr:expr) => {
-        Box::pin($expr)
+    ($task:expr, $sm:expr) => {
+        Box::pin($task($sm.dupe()))
     };
 }
 
@@ -48,41 +49,54 @@ enum State {
     Responded,
 }
 
-pub struct SansIo<Api> {
-    op: RefCell<Option<Api>>,
-    st: RefCell<State>,
+pub struct SansIo<Args, Returns = Args> {
+    args: Rc<RefCell<Option<Args>>>,
+    ret: Rc<RefCell<Option<Returns>>>,
+    st: Rc<RefCell<State>>,
 }
 
-impl<Api> SansIo<Api> {
+impl<Args, Returns> SansIo<Args, Returns> {
     pub fn new() -> Self {
         Self {
-            op: Default::default(),
-            st: RefCell::new(State::Ready),
+            args: Default::default(),
+            ret: Default::default(),
+            st: Rc::new(RefCell::new(State::Ready)),
+        }
+    }
+
+    pub fn dupe(&self) -> Self {
+        Self {
+            args: Rc::clone(&self.args),
+            ret: Rc::clone(&self.ret),
+            st: Rc::clone(&self.st),
         }
     }
 
     pub fn invoke(
         &self,
-        api: Api,
-    ) -> Result<impl Future<Output = Api> + use<'_, Api>, Error> {
+        args: Args,
+    ) -> Result<impl Future<Output = Returns> + use<'_, Args, Returns>, Error>
+    {
         if !self.in_state(State::Ready) {
             return Err(Error::InvalidInvocation);
         }
 
-        assert!(self.op.borrow().is_none());
+        assert!(self.args.borrow().is_none());
+        assert!(self.ret.borrow().is_none());
 
-        self.op.borrow_mut().replace(api);
+        self.args.borrow_mut().replace(args);
         self.transition(State::Ready, State::Calling);
         Ok(SansIoFuture::new(self))
     }
 
-    pub fn respond(&self, api: Api) -> Result<(), Error> {
+    pub fn respond(&self, ret: Returns) -> Result<(), Error> {
         if !self.in_state(State::Responding) {
             return Err(Error::InvalidResponse);
         }
 
-        assert!(self.op.borrow().is_none());
-        self.op.borrow_mut().replace(api);
+        assert!(self.args.borrow().is_none());
+        assert!(self.ret.borrow().is_none());
+        self.ret.borrow_mut().replace(ret);
 
         self.transition(State::Responding, State::Responded);
 
@@ -98,34 +112,34 @@ impl<Api> SansIo<Api> {
         return st == *self.st.borrow();
     }
 
-    fn take_request(&self) -> Api {
+    fn take_request(&self) -> Args {
         assert!(self.in_state(State::Calling));
         self.transition(State::Calling, State::Responding);
         // The unwrap is our assertion that we have an operation to
         // deliver after the task yielded.
-        self.op.borrow_mut().take().unwrap()
+        self.args.borrow_mut().take().unwrap()
     }
 }
 
-impl<Api> Default for SansIo<Api> {
+impl<Args, Returns> Default for SansIo<Args, Returns> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-struct SansIoFuture<'sio, Api> {
-    sio: &'sio SansIo<Api>,
+struct SansIoFuture<'sio, Args, Returns> {
+    sio: &'sio SansIo<Args, Returns>,
 }
 
-impl<'sio, Api> SansIoFuture<'sio, Api> {
-    fn new(sio: &'sio SansIo<Api>) -> Self {
+impl<'sio, Args, Returns> SansIoFuture<'sio, Args, Returns> {
+    fn new(sio: &'sio SansIo<Args, Returns>) -> Self {
         assert!(sio.in_state(State::Calling));
         Self { sio }
     }
 }
 
-impl<Api> Future for SansIoFuture<'_, Api> {
-    type Output = Api;
+impl<Args, Returns> Future for SansIoFuture<'_, Args, Returns> {
+    type Output = Returns;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         if self.sio.in_state(State::Calling) {
@@ -135,7 +149,7 @@ impl<Api> Future for SansIoFuture<'_, Api> {
             Poll::Pending
         } else if self.sio.in_state(State::Responded) {
             self.sio.transition(State::Responded, State::Ready);
-            Poll::Ready(self.sio.op.borrow_mut().take().unwrap())
+            Poll::Ready(self.sio.ret.borrow_mut().take().unwrap())
         } else {
             panic!("Invalid sans-io state.");
         }
@@ -143,7 +157,7 @@ impl<Api> Future for SansIoFuture<'_, Api> {
 }
 
 pub enum Step<Api, Return> {
-    Call(Api),
+    Next(Api),
     Return(Return),
 }
 
@@ -161,10 +175,10 @@ impl<'task, Return> Driver<'task, Return> {
         }
     }
 
-    pub fn step<Api>(
+    pub fn step<Args, Returns>(
         &mut self,
-        sio: &SansIo<Api>,
-    ) -> Result<Step<Api, Return>, Error> {
+        sio: &SansIo<Args, Returns>,
+    ) -> Result<Step<Args, Return>, Error> {
         if !(sio.in_state(State::Ready) || sio.in_state(State::Responded)) {
             return Err(Error::InvalidStepAttempt);
         }
@@ -174,7 +188,7 @@ impl<'task, Return> Driver<'task, Return> {
                 assert!(sio.in_state(State::Ready));
                 Ok(Step::Return(ret))
             }
-            Poll::Pending => Ok(Step::Call(sio.take_request())),
+            Poll::Pending => Ok(Step::Next(sio.take_request())),
         }
     }
 }
