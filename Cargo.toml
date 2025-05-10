@@ -1,6 +1,45 @@
 [package]
 name = "sans-io"
-version = "0.1.0"
+categories = ["async"]
+description = "A synchronous executor for async code"
 edition = "2024"
+keywords = ["sans-io", "async", "runtime"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/davisp/sans-io"
+rust-version = "1.85"
+version = "0.1.0"
 
 [dependencies]
+
+[dev-dependencies]
+anyhow = "1"
+async-trait = "0.1"
+stun = "0.7"
+thiserror = "2"
+tokio = "1.32.0"
+
+# Deny by default, any allowed lint should have a justification in a comment.
+
+[lints.rust]
+warnings = "deny"
+deprecated-safe = "deny"
+future-incompatible = "deny"
+keyword-idents = "deny"
+let-underscore = "deny"
+unused = "deny"
+
+[lints.clippy]
+# Set -1 priority for everything so that individual lints don't require
+# a priority setting (default priority is 0)
+cargo = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
+# I have no idea why this is triggering. I'm not seeing anything in cargo tree.
+multiple_crate_versions = "allow"
